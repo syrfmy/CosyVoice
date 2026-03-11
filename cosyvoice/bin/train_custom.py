@@ -389,11 +389,15 @@ def main():
         logging.info(f'Loaded checkpoint: step={start_step}, epoch={start_epoch}')
 
     # --- Wrap model for DDP ---
-    model = wrap_cuda_model(args, model)
-
-    # --- DDP static graph for LoRA + gradient checkpointing ---
-    if args.train_engine == 'torch_ddp' and hasattr(model, '_set_static_graph'):
-        model._set_static_graph()
+    if args.train_engine == 'torch_ddp':
+        assert torch.cuda.is_available()
+        model.cuda()
+        # QLoRA with non-reentrant gradient checkpointing requires find_unused_parameters=False
+        # explicitly avoiding _set_static_graph() which crashes in DDP's no_sync() context.
+        import torch.nn.parallel as parallel
+        model = parallel.DistributedDataParallel(model, find_unused_parameters=False)
+    else:
+        model = wrap_cuda_model(args, model)
 
     # --- Optimizer & scheduler ---
     model, optimizer, scheduler, _, _ = init_optimizer_and_scheduler(args, configs, model, gan)
