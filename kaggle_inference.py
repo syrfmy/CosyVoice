@@ -16,11 +16,11 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s %(levelname)s %(mess
 # --- Pretrained Model (base CosyVoice3 with configs, flow.pt, hift.pt, etc.) ---
 PRETRAINED_MODEL_DIR = "/kaggle/input/datasets/rustedpipe/cosyvoice3-pretrained/Fun-CosyVoice3-0.5B"
 
-# --- Fine-Tuned Checkpoint (from HuggingFace or local) ---
-# Set to a HuggingFace repo ID (e.g. "your_username/cosyvoice3-finetuned-llm") or a local directory path.
+# --- Fine-Tuned Checkpoint (local path from training output) ---
+# Set to the DeepSpeed best_model directory from kaggle_train.py output.
 # If set to None, inference uses the pretrained model without any fine-tuning.
-HF_FINETUNED_LLM_REPO = None       # e.g. "your_username/cosyvoice3-finetuned-llm"
-HF_FINETUNED_FLOW_REPO = None      # e.g. "your_username/cosyvoice3-finetuned-flow" (if you trained flow)
+FINETUNED_LLM_DIR = "/kaggle/working/output/llm/best_model"      # matches kaggle_train.py OUTPUT_DIR + "llm"
+FINETUNED_FLOW_DIR = None                                         # e.g. "/kaggle/working/output/flow/best_model" (if you trained flow)
 
 # --- HuggingFace Test Dataset ---
 HF_DATASET = "your_username/your_dataset"    # HuggingFace dataset ID
@@ -76,76 +76,42 @@ def convert_deepspeed_checkpoint(ds_checkpoint_dir, output_pt_path):
     return output_pt_path
 
 
-def download_hf_checkpoint(repo_id):
-    """Download only the model weights from a HuggingFace repo (skips optimizer states).
-    
-    DeepSpeed uploads contain:
-      - mp_rank_00_model_states.pt  (2GB, needed)
-      - zero_pp_rank_*_optim_states.pt  (3GB each, NOT needed for inference)
-    
-    This function only downloads the model weights file to save bandwidth and disk space.
-    """
-    from huggingface_hub import hf_hub_download
-    logging.info(f"Downloading fine-tuned model weights from HuggingFace: {repo_id}")
-    local_path = hf_hub_download(
-        repo_id=repo_id,
-        filename="mp_rank_00_model_states.pt",
-        repo_type="model",
-    )
-    # Return the parent directory so convert_deepspeed_checkpoint can find it
-    local_dir = os.path.dirname(local_path)
-    logging.info(f"Downloaded model weights to: {local_path} (skipped optimizer states)")
-    return local_dir
-
-
 def prepare_model_dir():
     """Prepare a model directory that CosyVoice's AutoModel can load.
 
     Strategy:
-    1. Copy the pretrained model directory to a working location
-    2. Replace llm.pt and/or flow.pt with converted fine-tuned weights (if available)
+    - Symlink all files from the pretrained dir (read-only) into a working dir
+    - Only the fine-tuned llm.pt (and optionally flow.pt) are real files
+    - This avoids copying ~2GB of pretrained weights and saves disk space
     """
     inference_model_dir = "/kaggle/working/inference_model"
 
     if os.path.exists(inference_model_dir):
         shutil.rmtree(inference_model_dir)
+    os.makedirs(inference_model_dir)
 
-    logging.info(f"Copying pretrained model from {PRETRAINED_MODEL_DIR} to {inference_model_dir}")
-    shutil.copytree(PRETRAINED_MODEL_DIR, inference_model_dir)
+    # Symlink all files from pretrained dir
+    for item in os.listdir(PRETRAINED_MODEL_DIR):
+        src = os.path.join(PRETRAINED_MODEL_DIR, item)
+        dst = os.path.join(inference_model_dir, item)
+        os.symlink(src, dst)
+    logging.info(f"Symlinked pretrained model from {PRETRAINED_MODEL_DIR}")
 
-    # Replace LLM weights if fine-tuned
-    if HF_FINETUNED_LLM_REPO:
-        finetuned_dir = download_hf_checkpoint(HF_FINETUNED_LLM_REPO)
-
+    # Replace LLM weights if fine-tuned (remove symlink, write real file)
+    if FINETUNED_LLM_DIR and os.path.isdir(FINETUNED_LLM_DIR):
         llm_pt = os.path.join(inference_model_dir, 'llm.pt')
-        ds_model_file = os.path.join(finetuned_dir, 'mp_rank_00_model_states.pt')
-
-        if os.path.exists(ds_model_file):
-            # DeepSpeed checkpoint directory → convert
-            logging.info("Converting fine-tuned LLM DeepSpeed checkpoint...")
-            convert_deepspeed_checkpoint(finetuned_dir, llm_pt)
-        elif os.path.exists(os.path.join(finetuned_dir, 'llm.pt')):
-            # Already a flat .pt file → copy directly
-            logging.info("Copying fine-tuned llm.pt directly...")
-            shutil.copy2(os.path.join(finetuned_dir, 'llm.pt'), llm_pt)
-        else:
-            logging.warning(f"Could not find model weights in {finetuned_dir}. Using pretrained LLM.")
+        if os.path.islink(llm_pt):
+            os.unlink(llm_pt)
+        logging.info(f"Converting fine-tuned LLM checkpoint from: {FINETUNED_LLM_DIR}")
+        convert_deepspeed_checkpoint(FINETUNED_LLM_DIR, llm_pt)
 
     # Replace Flow weights if fine-tuned
-    if HF_FINETUNED_FLOW_REPO:
-        finetuned_dir = download_hf_checkpoint(HF_FINETUNED_FLOW_REPO)
-
+    if FINETUNED_FLOW_DIR and os.path.isdir(FINETUNED_FLOW_DIR):
         flow_pt = os.path.join(inference_model_dir, 'flow.pt')
-        ds_model_file = os.path.join(finetuned_dir, 'mp_rank_00_model_states.pt')
-
-        if os.path.exists(ds_model_file):
-            logging.info("Converting fine-tuned Flow DeepSpeed checkpoint...")
-            convert_deepspeed_checkpoint(finetuned_dir, flow_pt)
-        elif os.path.exists(os.path.join(finetuned_dir, 'flow.pt')):
-            logging.info("Copying fine-tuned flow.pt directly...")
-            shutil.copy2(os.path.join(finetuned_dir, 'flow.pt'), flow_pt)
-        else:
-            logging.warning(f"Could not find model weights in {finetuned_dir}. Using pretrained Flow.")
+        if os.path.islink(flow_pt):
+            os.unlink(flow_pt)
+        logging.info(f"Converting fine-tuned Flow checkpoint from: {FINETUNED_FLOW_DIR}")
+        convert_deepspeed_checkpoint(FINETUNED_FLOW_DIR, flow_pt)
 
     logging.info(f"Inference model directory ready: {inference_model_dir}")
     return inference_model_dir
@@ -214,19 +180,23 @@ def main():
 
         try:
             if MODE == "instruct":
-                # instruct mode: instruction tells the model what to change about the voice
+                # CosyVoice3 requires <|endofprompt|> — must match kaggle_hf_prep.py format exactly
+                formatted_instruction = f"You are a specialized Indonesian Speech Editing AI. Tugas: Edit audio ini. Instruksi: {instruction}<|endofprompt|>"
                 results = cosyvoice.inference_instruct2(
-                    text, instruction, prompt_wav_path, stream=False
+                    text, formatted_instruction, prompt_wav_path, stream=False
                 )
             elif MODE == "zero_shot":
-                # zero_shot mode: clone the voice from prompt audio
-                prompt_text = text  # Use the transcript as prompt text
+                # CosyVoice3 requires <|endofprompt|> in prompt_text
+                # Format: "You are a helpful assistant.<|endofprompt|>{prompt_text}"
+                formatted_prompt = f"You are a helpful assistant.<|endofprompt|>{text}"
                 results = cosyvoice.inference_zero_shot(
-                    text, prompt_text, prompt_wav_path, stream=False
+                    text, formatted_prompt, prompt_wav_path, stream=False
                 )
             elif MODE == "cross_lingual":
+                # CosyVoice3 requires <|endofprompt|> in text
+                formatted_text = f"You are a helpful assistant.<|endofprompt|>{text}"
                 results = cosyvoice.inference_cross_lingual(
-                    text, prompt_wav_path, stream=False
+                    formatted_text, prompt_wav_path, stream=False
                 )
             else:
                 raise ValueError(f"Unknown MODE: {MODE}")

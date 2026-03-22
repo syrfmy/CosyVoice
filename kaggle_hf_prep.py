@@ -170,8 +170,11 @@ def process_split(ds, split, output_dir, emb_session, tok_session):
                         src_attr = {}
                 transcript = src_attr.get('teks', '') if isinstance(src_attr, dict) else ''
 
-                # Get editing instruction
-                instruction = item.get(COL_INSTRUCTION, '')
+                # Get editing instruction — format with CosyVoice3 prompt template
+                # Must match inference format exactly (train/test consistency)
+                # Follows the same wording as format_for_trainer_chat
+                raw_instruction = item.get(COL_INSTRUCTION, '')
+                instruction = f"You are a specialized Indonesian Speech Editing AI. Tugas: Edit audio ini. Instruksi: {raw_instruction}<|endofprompt|>"
 
                 # Extract speaker embedding from source audio
                 embedding = extract_embedding(src_audio, src_sr, emb_session) if emb_session else [0.0] * 192
@@ -186,7 +189,7 @@ def process_split(ds, split, output_dir, emb_session, tok_session):
                     'utt': utt,
                     'audio_data': audio_data,
                     'text': transcript,            # transcript text (tokenized by data_pipeline)
-                    'instruct': instruction,       # editing instruction (e.g. "change emotion to happy")
+                    'instruct': instruction,       # CosyVoice3-formatted instruction with <|endofprompt|>
                     'speech_token': speech_token,
                     'utt_embedding': embedding,
                     'spk_embedding': embedding,    # same as utt_embedding for single-speaker samples

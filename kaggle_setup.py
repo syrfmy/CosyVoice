@@ -31,7 +31,7 @@ def main():
     run("pip install uv -q")
 
     # --- Step 3: Clone repo with submodules ---
-    run("git clone --recurse-submodules https://github.com/FunAudioLLM/CosyVoice.git",
+    run("git clone --recurse-submodules https://github.com/syrfmy/CosyVoice.git",
         cwd=working_dir)
     os.chdir(cosyvoice_dir)
 
@@ -47,6 +47,7 @@ def main():
         "hydra-core==1.3.2",
         "HyperPyYAML==1.2.3",
         "lightning==2.2.4",
+        "numba",
         "numpy>=1.26,<2",
         "omegaconf==2.3.0",
         "onnxruntime-gpu==1.18.0",
