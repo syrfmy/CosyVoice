@@ -200,6 +200,12 @@ def main():
 
         # Get text from source_attribute
         src_attr = item.get(COL_SOURCE_ATTR, {})
+        if isinstance(src_attr, str):
+            import json
+            try:
+                src_attr = json.loads(src_attr)
+            except (json.JSONDecodeError, TypeError):
+                src_attr = {}
         text = src_attr.get('teks', '') if isinstance(src_attr, dict) else ''
         instruction = item.get(COL_INSTRUCTION, '')
 
