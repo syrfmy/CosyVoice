@@ -75,6 +75,22 @@ def log_metrics(tag, step, epoch, loss_dict, info_dict, rank):
         wandb.log(wandb_log, step=step + 1)
 
 
+def cleanup_optim_states(checkpoint_dir):
+    """Delete ZeRO optimizer state files from a DeepSpeed checkpoint to save disk space.
+    
+    DeepSpeed ignores 'save_optimizer_states: false' for ZeRO sharded files.
+    Each optim_states file is ~3GB and NOT needed for inference or resuming fine-tuning.
+    """
+    if not os.path.isdir(checkpoint_dir):
+        return
+    for f in os.listdir(checkpoint_dir):
+        if 'optim_states' in f and f.endswith('.pt'):
+            path = os.path.join(checkpoint_dir, f)
+            size_mb = os.path.getsize(path) / 1e6
+            os.remove(path)
+            logging.info(f'[Checkpoint] 🗑️ Deleted optimizer states: {f} ({size_mb:.0f} MB freed)')
+
+
 def cleanup_checkpoints(model_dir, keep_n=2):
     """Keep only the N most recent checkpoints + best_model."""
     # train_utils always saves a .yaml config file for every checkpoint type (DDP and DeepSpeed)
@@ -264,6 +280,8 @@ def train(model, optimizer, scheduler, scaler, train_data_loader, cv_data_loader
                             info_dict['step'] = global_step - 1
                             model_name = f'step_{global_step}'
                             save_model(model, model_name, info_dict)
+                            if rank == 0:
+                                cleanup_optim_states(os.path.join(model_dir, model_name))
 
                         # Best model tracking
                         if eval_loss is not None:
@@ -281,6 +299,8 @@ def train(model, optimizer, scheduler, scaler, train_data_loader, cv_data_loader
                                 dist.barrier()
                                 torch.cuda.empty_cache()
                                 save_model(model, 'best_model', info_dict)
+                                if rank == 0:
+                                    cleanup_optim_states(os.path.join(model_dir, 'best_model'))
                                 logging.info(f'[Best] 🏆 New best eval loss: {eval_loss:.6f}')
                             else:
                                 patience_counter += 1

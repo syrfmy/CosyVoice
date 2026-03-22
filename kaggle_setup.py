@@ -50,7 +50,7 @@ def main():
         "numba",
         "numpy>=1.26,<2",
         "omegaconf==2.3.0",
-        "onnxruntime-gpu==1.18.0",
+        "onnxruntime-gpu>=1.19.0",  # >=1.19 uses CUDA 12.x wheels by default (matches Kaggle)
         "openai-whisper",
         "pyarrow==18.1.0",
         "pyworld==0.3.4",
